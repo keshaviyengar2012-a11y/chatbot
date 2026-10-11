@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Learning Assistant</title>
+<style>
+  :root { --bg:#f7f7f5; --panel:#fff; --ink:#1d1d1f; --muted:#6b6b70; --accent:#2f6fdb; --line:#e2e2e0; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg:#16171a; --panel:#1f2024; --ink:#ececee; --muted:#9a9aa2; --accent:#7aa7ff; --line:#2e2f35; }
+  }
+  :root[data-theme="dark"] { --bg:#16171a; --panel:#1f2024; --ink:#ececee; --muted:#9a9aa2; --accent:#7aa7ff; --line:#2e2f35; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width: 760px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.4rem; margin: 8px 0 16px; }
+  .panel { background: var(--panel); border:1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  label { display:block; font-size: .85rem; color: var(--muted); margin: 10px 0 4px; }
+  input, select, textarea { width:100%; font: inherit; padding: 8px 10px; border:1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); }
+  .row { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 560px) { .row { grid-template-columns: 1fr; } }
+  button { font: inherit; padding: 9px 16px; border:0; border-radius: 8px; background: var(--accent); color:#fff; cursor:pointer; margin-top: 12px; }
+  button:disabled { opacity: .5; cursor: default; }
+  #log { min-height: 200px; max-height: 55vh; overflow-y: auto; }
+  .msg { padding: 10px 12px; border-radius: 10px; margin: 8px 0; white-space: pre-wrap; }
+  .user { background: var(--accent); color:#fff; margin-left: 15%; }
+  .tutor { border:1px solid var(--line); margin-right: 15%; }
+  .meta { font-size: .8rem; color: var(--muted); margin: 0 0 8px; }
+  .sources a { color: var(--accent); }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Learning Assistant</h1>
+
+  <section class="panel" id="setup">
+    <strong>Set up your profile</strong>
+    <div class="row">
+      <div><label for="name">Name</label><input id="name"></div>
+      <div><label for="grade">Grade / level</label><input id="grade" placeholder="e.g. Grade 10"></div>
+    </div>
+    <div class="row">
+      <div><label for="subject">Subject</label><input id="subject" placeholder="e.g. Algebra"></div>
+      <div><label for="curriculum">Curriculum (optional)</label><input id="curriculum" placeholder="e.g. CBSE Class 10"></div>
+    </div>
+    <label for="expect">Teacher expectations (optional)</label>
+    <textarea id="expect" rows="2" placeholder="e.g. Show every step; use the substitution method"></textarea>
+    <div class="row">
+      <div><label for="style">How you learn best</label>
+        <select id="style">
+          <option value="step-by-step">Step by step</option>
+          <option value="example-driven">Examples first</option>
+          <option value="visual">Visual</option>
+          <option value="verbal">Explanations in words</option>
+        </select></div>
+      <div><label for="depth">Explanation length</label>
+        <select id="depth"><option value="brief">Brief</option><option value="standard" selected>Standard</option><option value="detailed">Detailed</option></select></div>
+    </div>
+    <button id="save">Start learning</button>
+    <p class="meta" id="setupErr"></p>
+  </section>
+
+  <section class="panel hidden" id="chatPanel">
+    <div id="log"></div>
+    <div class="row" style="grid-template-columns: 1fr auto; align-items:end; margin-top:10px">
+      <textarea id="input" rows="2" placeholder="Ask a question or share your attempt…"></textarea>
+      <button id="send">Send</button>
+    </div>
+    <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="useWeb" style="width:auto"> Search the web for current information</label>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let studentId = null;
+let history = [];
+
+function addMsg(role, text, extra) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + (role === 'user' ? 'user' : 'tutor');
+  div.textContent = text;
+  $('log').appendChild(div);
+  if (extra) {
+    const meta = document.createElement('div');
+    meta.className = 'meta sources';
+    extra.forEach((s) => {
+      const span = document.createElement('div');
+      if (s.url) { const a = document.createElement('a'); a.href = s.url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = s.title; span.appendChild(a); }
+      else span.textContent = 'Course material: ' + s.title;
+      meta.appendChild(span);
+    });
+    $('log').appendChild(meta);
+  }
+  $('log').scrollTop = $('log').scrollHeight;
+}
+
+$('save').onclick = async () => {
+  $('setupErr').textContent = '';
+  const body = {
+    name: $('name').value.trim(), grade_level: $('grade').value.trim(), subject: $('subject').value.trim(),
+    curriculum: $('curriculum').value.trim(), teacher_expectations: $('expect').value.trim(),
+    learning_style: $('style').value, explanation_depth: $('depth').value,
+  };
+  const res = await fetch('/api/students', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    $('setupErr').textContent = typeof data.detail === 'string' ? data.detail : 'Please check the fields and try again.';
+    return;
+  }
+  studentId = (await res.json()).id;
+  $('setup').classList.add('hidden');
+  $('chatPanel').classList.remove('hidden');
+  $('useWeb').checked = true;
+  addMsg('tutor', `Hi ${body.name}! What are we working on today? Tell me what you've tried so far and I'll help you get to the answer yourself.`);
+};
+
+async function send() {
+  const message = $('input').value.trim();
+  if (!message) return;
+  $('send').disabled = true;
+  $('input').value = '';
+  addMsg('user', message);
+  try {
+    const res = await fetch(`/api/students/${studentId}/chat`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ message, history, use_web: $('useWeb').checked }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Request failed');
+    history.push({ role: 'user', content: message }, { role: 'assistant', content: data.reply });
+    history = history.slice(-40);
+    addMsg('tutor', data.reply, data.sources);
+    if (data.warnings && data.warnings.length) addMsg('tutor', data.warnings.join(' '));
+  } catch (err) {
+    addMsg('tutor', 'Something went wrong: ' + err.message);
+  } finally {
+    $('send').disabled = false;
+    $('input').focus();
+  }
+}
+$('send').onclick = send;
+$('input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+</script>
+</body>
+</html>
